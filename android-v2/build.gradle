@@ -214,7 +214,7 @@ configurations.all {
 
 android {
   namespace 'tribixbite.cleverkeys'
-  compileSdk 34
+  compileSdk 35
   // REPRODUCIBILITY: Let AGP use its default build-tools (pinned per AGP version)
   // Removed explicit buildToolsVersion - both GitHub and F-Droid use AGP 8.8.2 default
 

@@ -1,5 +1,7 @@
 package tribixbite.cleverkeys.ui.settings
 
+import android.content.Intent
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
@@ -47,12 +49,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import tribixbite.cleverkeys.R
 import tribixbite.cleverkeys.SettingsActivity
+import tribixbite.cleverkeys.ThemeSettingsActivity
 import tribixbite.cleverkeys.ui.settings.sections.AccessibilitySection
 import tribixbite.cleverkeys.ui.settings.sections.ActivitiesSection
 import tribixbite.cleverkeys.ui.settings.sections.AdvancedSection
@@ -76,6 +80,7 @@ import tribixbite.cleverkeys.ui.settings.sections.VersionActionsSection
 @Composable
 internal fun SettingsActivity.SettingsScreen() {
         var showAdvancedTools by rememberSaveable { mutableStateOf(false) }
+        val lunexContext = LocalContext.current
         val scrollState = rememberScrollState()
         // Store references for scroll-to-setting functionality.
         // composeScope has MonotonicFrameClock needed for animateScrollTo.
@@ -233,8 +238,23 @@ internal fun SettingsActivity.SettingsScreen() {
             }
 
             // Default settings are deliberately concise; all original options are preserved.
+            Card(
+                modifier = Modifier.fillMaxWidth().clickable {
+                    lunexContext.startActivity(Intent(lunexContext, ThemeSettingsActivity::class.java))
+                },
+                shape = RoundedCornerShape(22.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+            ) {
+                Column(modifier = Modifier.padding(18.dp)) {
+                    Text("✦ Liquid Glass", fontSize = 21.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        stringResource(R.string.lunex_glass_themes_desc),
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                }
+            }
             TestKeyboardSection()
-            ActivitiesSection()
             AppearanceSection()
             SwipeTypingSection()
             InputBehaviorSection()
@@ -253,6 +273,7 @@ internal fun SettingsActivity.SettingsScreen() {
                 )
             }
             if (showAdvancedTools) {
+                ActivitiesSection()
                 SwipeTrailSection()
                 GestureTuningSection()
                 AccessibilitySection()

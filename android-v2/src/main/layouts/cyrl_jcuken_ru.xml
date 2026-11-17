@@ -40,8 +40,8 @@
     <key width="1.22" key0="backspace" key2="delete"/>
   </row>
   <row height="0.95">
-    <key width="1.4" c="?#1:switch_numeric" ne="loc switch_clipboard" />
-    <key width="1.0" c="switch_forward" nw="loc change_method" ne="config" />
+    <key width="1.4" c="#1?:switch_numeric" ne="loc switch_clipboard" />
+    <key width="1.0" c="🌐:switch_forward" nw="loc change_method" ne="config" />
     <key width="0.85" c="," />
     <key width="5.3" c="space" n="switch_forward" s="switch_backward" w="cursor_left" e="cursor_right" />
     <key width="0.85" c="." />
