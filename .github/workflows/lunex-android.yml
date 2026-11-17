@@ -22,7 +22,7 @@ jobs:
           SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)
           test -n "$SDKMANAGER"
           yes | "$SDKMANAGER" --licenses >/dev/null || true
-          "$SDKMANAGER" 'platforms;android-37' 'build-tools;36.1.0' 'ndk;28.0.13004108'
+          "$SDKMANAGER" 'platforms;android-36' 'build-tools;36.1.0' 'ndk;28.0.13004108'
       - name: Assemble debug APK
         env:
           GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx2g

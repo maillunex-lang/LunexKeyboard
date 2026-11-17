@@ -7,12 +7,12 @@ plugins {
 }
 
 android {
-    compileSdk = 37
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "ai.lunex.keyboard"
         minSdk = 21
-        targetSdk = 37
+        targetSdk = 36
         versionCode = 4301
         versionName = "4.3-beta2"
         ndk {
