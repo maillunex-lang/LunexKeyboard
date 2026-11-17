@@ -1,0 +1,36 @@
+name: Lunex Keyboard Android
+on:
+  push:
+    branches: [feat/liquid-glass, main]
+  pull_request:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android toolchain
+        shell: bash
+        run: |
+          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)
+          test -n "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" 'platforms;android-36' 'build-tools;36.1.0' 'ndk;28.0.13004108'
+      - name: Assemble debug APK
+        env:
+          GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx2g
+        run: ./gradlew --no-daemon --max-workers=2 :app:assembleDebugNoMinify
+      - name: Publish debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: lunex-keyboard-debug-apk
+          path: app/build/outputs/apk/debugNoMinify/*.apk
+          if-no-files-found: error
+          retention-days: 14
