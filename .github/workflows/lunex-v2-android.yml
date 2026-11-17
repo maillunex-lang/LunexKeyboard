@@ -1,0 +1,37 @@
+name: Lunex Keyboard V2 Android
+on:
+  push:
+    branches: [feat/keyboard-v2]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Check Android SDK
+        shell: bash
+        run: |
+          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)
+          test -n "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" 'platforms;android-34' 'build-tools;35.0.0'
+      - name: Build debug APK
+        working-directory: android-v2
+        env:
+          GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx3g
+        run: ./gradlew --no-daemon --max-workers=2 assembleDebug
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: lunex-keyboard-v2-android-arm64
+          path: android-v2/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14

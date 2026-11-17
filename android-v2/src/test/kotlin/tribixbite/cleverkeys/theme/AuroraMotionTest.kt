@@ -1,0 +1,463 @@
+package tribixbite.cleverkeys.theme
+
+import com.google.common.collect.Range
+import com.google.common.truth.Truth.assertThat
+import com.google.common.truth.Truth.assertWithMessage
+import org.junit.Test
+import kotlin.math.abs
+import kotlin.math.hypot
+
+/**
+ * The aurora's optional motion (maintainer 2026-11-10: gentle, negligible overhead, and it must
+ * stop when the keyboard is idle so the phone can idle): ranges, continuity, the second image,
+ * and the idle clock.
+ */
+class AuroraMotionTest {
+
+    @Test
+    fun everyFrameStaysInRangeAndADriftNeverUncoversAnEdge() {
+        for (style in listOf(MotionStyle.GENTLE, MotionStyle.AURORA)) {
+            for (intensity in listOf(0f, 1f, 2f)) {
+                val tuning = SceneMotionTuning(intensity = intensity)
+                assertThat(style.marginDp(intensity)).isAtLeast(style.driftDp * intensity)
+                var t = 0.0
+                while (t < 600.0) {
+                    val f = AuroraMotion.frame(t, style, tuning)
+                    assertThat(f.crossfade).isIn(Range.closed(0f, 1f))
+                    assertThat(abs(f.driftADp)).isAtMost(style.driftDp * intensity)
+                    assertThat(abs(f.driftBDp)).isAtMost(style.driftDp * intensity)
+                    assertThat(f.starAlpha.size).isEqualTo(AuroraMotion.STAR_GROUPS)
+                    for (a in f.starAlpha) assertThat(a).isIn(Range.closed(1f - tuning.twinkle, 1f))
+                    t += 0.37
+                }
+            }
+        }
+    }
+
+    /**
+     * "Gently": between two frames at the rate each style is shown at, the curtains drift at most
+     * about a dp, the cross-fade changes by at most a tenth and a star group's brightness by about
+     * a tenth. Absolute ceilings, not bounds scaled by the frame interval: the aurora's 5 fps
+     * (maintainer, 2026-11-12) doubled every step of its former 10 fps and sits at these ceilings
+     * (drift 1.08 dp, cross-fade 0.100, stars 0.111); a lower rate or faster motion must fail here.
+     * The snow's sky moves in the aurora's style at the snow's 8 fps. Sampled every 50 ms.
+     */
+    @Test
+    fun consecutiveFramesMoveByASliverOfADp() {
+        for ((style, frameMs, maxDrift, maxFade) in listOf(
+            Quad(MotionStyle.GENTLE, AuroraMotion.FRAME_MS, 0.2f, 0.05f),
+            Quad(MotionStyle.AURORA, AuroraMotion.AURORA_FRAME_MS, 1.1f, 0.101f),
+            Quad(MotionStyle.forScene(SceneKind.SNOW), SceneKind.SNOW.frameMs, 1.1f, 0.101f),
+        )) {
+            val dt = frameMs / 1000.0
+            var t = 0.0
+            while (t < 300.0) {
+                val a = AuroraMotion.frame(t, style)
+                val b = AuroraMotion.frame(t + dt, style)
+                assertWithMessage("drift per frame at $t").that(abs(b.driftADp - a.driftADp)).isAtMost(maxDrift)
+                assertThat(abs(b.driftBDp - a.driftBDp)).isAtMost(maxDrift)
+                assertWithMessage("cross-fade per frame").that(abs(b.crossfade - a.crossfade)).isAtMost(maxFade)
+                for (i in a.starAlpha.indices) assertThat(abs(b.starAlpha[i] - a.starAlpha[i])).isAtMost(0.115f)
+                t += 0.05
+            }
+        }
+    }
+
+    /**
+     * A drifting particle (pollen, glints, snowflakes) travels at most [MAX_PARTICLE_STEP_DP]
+     * between two frames at its scene's own rate, at the fastest group's speed.
+     */
+    @Test
+    fun driftingParticlesStepAtMostAFewDpPerFrame() {
+        val fastest = AuroraMotion.groupSpeed(AuroraMotion.STAR_GROUPS - 1)
+        assertThat(fastest).isWithin(1e-6f).of(1.3f)
+        assertThat(AuroraMotion.groupSpeed(0)).isWithin(1e-6f).of(0.7f)
+        for (look in KeyboardLooks.SCENES) {
+            val backdrop = look.dark.backdrop ?: continue
+            val field = backdrop.stars ?: continue
+            val frameMs = backdrop.scene?.frameMs ?: AuroraMotion.AURORA_FRAME_MS
+            val step = hypot(field.driftXDpPerS, field.driftYDpPerS) * fastest * frameMs / 1000f
+            assertWithMessage("${look.id} particle step, dp").that(step.toDouble()).isAtMost(MAX_PARTICLE_STEP_DP.toDouble())
+        }
+    }
+
+    private data class Quad(val style: MotionStyle, val frameMs: Long, val maxDrift: Float, val maxFade: Float)
+
+    /**
+     * Maintainer 2026-11-10: "aurora is barely perceptible". Its motion sways well over twice as
+     * far as the gentle scenes' and cycles faster.
+     */
+    @Test
+    fun theAuroraMovesVisiblyMoreThanTheGentleScenes() {
+        assertThat(MotionStyle.AURORA.driftDp).isAtLeast(2 * MotionStyle.GENTLE.driftDp)
+        assertThat(MotionStyle.AURORA.fadePeriodS).isLessThan(MotionStyle.GENTLE.fadePeriodS)
+        assertThat(MotionStyle.AURORA.driftPeriodS).isLessThan(MotionStyle.GENTLE.driftPeriodS)
+    }
+
+    @Test
+    fun itActuallyMovesAndTheStillFrameIsTheFirstImage() {
+        val samples = (0 until 400).map { AuroraMotion.frame(it * 0.25) }
+        assertWithMessage("the cross-fade sweeps most of its range")
+            .that(samples.maxOf { it.crossfade } - samples.minOf { it.crossfade }).isGreaterThan(0.7f)
+        assertThat(samples.maxOf { it.driftADp } - samples.minOf { it.driftADp }).isGreaterThan(8f)
+        val rest = AuroraMotionFrame.REST
+        assertThat(rest.crossfade).isEqualTo(0f)
+        assertThat(rest.starAlpha.toList()).containsExactlyElementsIn(List(AuroraMotion.STAR_GROUPS) { 1f })
+    }
+
+    /**
+     * Review 2026-11-14 (low): with Animated scenes on, a backdrop that has not moved yet (motion
+     * time 0: just shown, or held by battery saver) showed the frame at 0, two thirds of the
+     * way into the second image, rather than the still picture the same theme shows with motion
+     * off. The motion now starts from the still picture, at every tuning and style, and leaves it
+     * smoothly (the per-frame ceilings above hold from 0).
+     */
+    @Test
+    fun theMotionStartsFromTheStillPicture() {
+        val rest = AuroraMotionFrame.REST
+        for (style in listOf(MotionStyle.GENTLE, MotionStyle.AURORA, MotionStyle.forScene(SceneKind.SNOW))) {
+            for (tuning in listOf(SceneMotionTuning.DEFAULT, SceneMotionTuning(intensity = 2f, twinkle = 1f), SceneMotionTuning(intensity = 0.3f))) {
+                val f = AuroraMotion.frame(0.0, style, tuning)
+                assertWithMessage("cross-fade at 0").that(f.crossfade).isWithin(1e-6f).of(rest.crossfade)
+                assertWithMessage("drift A at 0").that(f.driftADp).isWithin(1e-6f).of(rest.driftADp)
+                assertWithMessage("drift B at 0").that(f.driftBDp).isWithin(1e-6f).of(rest.driftBDp)
+                for (a in f.starAlpha) assertWithMessage("stars at 0").that(a).isWithin(1e-6f).of(1f)
+            }
+        }
+    }
+
+    /** The second image: other rays, folds moved along, more light (the cross-fade shimmers). */
+    @Test
+    fun theSecondImageHasOtherRaysAndMoreLight() {
+        val ribbons = KeyboardLooks.CLEVERKEYS_AURORA.ribbons
+        val alt = AuroraMotion.alternate(ribbons)
+        assertThat(alt).hasSize(ribbons.size)
+        for ((a, b) in ribbons.zip(alt)) {
+            assertThat(b.seed).isNotEqualTo(a.seed)
+            assertThat(b.edgeColor and 0xFFFFFF).isEqualTo(a.edgeColor and 0xFFFFFF)
+            assertWithMessage("brighter").that(b.edgeColor ushr 24).isGreaterThan(a.edgeColor ushr 24)
+            assertThat(b.topColor and 0xFFFFFF).isEqualTo(a.topColor and 0xFFFFFF)
+            assertThat(b.edgeY).isEqualTo(a.edgeY)
+            assertThat(abs(b.phase - a.phase)).isAtMost(0.1f)
+        }
+        val base = 0xFF0A080E.toInt()
+        assertWithMessage("a different picture")
+            .that(AuroraRaster.render(base, alt, 120, 80, 0.5f))
+            .isNotEqualTo(AuroraRaster.render(base, ribbons, 120, 80, 0.5f))
+    }
+
+    /**
+     * The user's tuning (maintainer 2026-11-10: "control all dynamic scene settings … speed,
+     * variation intensity, twinkling/shimmer, crispness"): intensity 0 holds the still picture,
+     * twinkle 0 holds every star steady, and the speed changes the clock's pace without moving
+     * where it is.
+     */
+    @Test
+    fun theTuningScalesTheMotionWithoutAJump() {
+        for (t in listOf(0.0, 3.3, 17.9)) {
+            val still = AuroraMotion.frame(t, MotionStyle.AURORA, SceneMotionTuning(intensity = 0f, twinkle = 0f))
+            assertThat(still.crossfade).isEqualTo(0f)
+            assertThat(still.driftADp).isEqualTo(0f)
+            assertThat(still.starAlpha.toList()).containsExactlyElementsIn(List(AuroraMotion.STAR_GROUPS) { 1f })
+            val wide = AuroraMotion.frame(t, MotionStyle.AURORA, SceneMotionTuning(intensity = 2f))
+            val usual = AuroraMotion.frame(t, MotionStyle.AURORA)
+            assertThat(wide.driftADp).isWithin(1e-4f).of(2 * usual.driftADp)
+        }
+        val shimmer = (0 until 200).flatMap { AuroraMotion.frame(it * 0.2, MotionStyle.AURORA, SceneMotionTuning(twinkle = 1f)).starAlpha.toList() }
+        assertWithMessage("full twinkle dims a star nearly out").that(shimmer.min()).isLessThan(0.05f)
+
+        val clock = AuroraMotionClock(idleMs = 60_000, easeMs = 0, maxStepMs = 2_000)
+        clock.wake(0); clock.advance(0)
+        clock.advance(1_000)
+        assertThat(clock.motionMs).isWithin(1e-6).of(1_000.0)
+        clock.rate = 2f
+        assertWithMessage("a new speed does not move the clock").that(clock.motionMs).isWithin(1e-6).of(1_000.0)
+        clock.advance(1_100)
+        assertThat(clock.motionMs).isWithin(1e-6).of(1_200.0)
+
+        // The settings' percentages, clamped to the sliders' ranges.
+        assertThat(SceneMotionTuning.fromPercent(100, 100, 55, false)).isEqualTo(SceneMotionTuning.DEFAULT)
+        val wild = SceneMotionTuning.fromPercent(speed = 9_999, intensity = -5, twinkle = 400, crisp = true)
+        assertThat(wild).isEqualTo(SceneMotionTuning(speed = 2f, intensity = 0f, twinkle = 1f, crisp = true))
+    }
+
+    @Test
+    fun theClockRunsWhileTouchedThenEasesToRestAfterTheIdleTimeout() {
+        val clock = AuroraMotionClock(idleMs = 20_000, easeMs = 2_500)
+        var now = 1_000L
+        assertWithMessage("never woken: at rest").that(clock.advance(now)).isFalse()
+        clock.wake(now)
+        val step = AuroraMotion.FRAME_MS
+        // Speeds up over the ease, without a jump on the first frame.
+        assertThat(clock.advance(now)).isTrue()
+        assertThat(clock.speed).isEqualTo(0f)
+        now += step; clock.advance(now)
+        assertThat(clock.speed).isIn(Range.openClosed(0f, 0.05f))
+        while (now < 1_000L + 19_000L) { now += step; assertThat(clock.advance(now)).isTrue() }
+        assertThat(clock.speed).isEqualTo(1f)
+        // Past the timeout it slows down over the ease, then stops.
+        var frames = 0
+        while (clock.advance(now)) { now += step; frames++; check(frames < 1_000) }
+        assertThat(clock.speed).isEqualTo(0f)
+        assertWithMessage("stops within the timeout plus the ease")
+            .that(now - 1_000L).isAtMost(20_000L + 2_500L + 2 * step)
+        val restingAt = clock.motionMs
+        now += 60_000; clock.advance(now)
+        assertWithMessage("at rest, motion time stands still").that(clock.motionMs).isEqualTo(restingAt)
+        // A touch starts it again from where it rested.
+        clock.wake(now)
+        assertThat(clock.advance(now)).isTrue()
+        now += step; clock.advance(now)
+        assertThat(clock.motionMs).isGreaterThan(restingAt)
+    }
+
+    @Test
+    fun aLongGapOrAHiddenKeyboardNeverJumps() {
+        val clock = AuroraMotionClock(idleMs = 20_000, easeMs = 0, maxStepMs = 250)
+        clock.wake(0); clock.advance(0)
+        clock.advance(100)
+        val before = clock.motionMs
+        clock.advance(10_100) // e.g. the main thread was blocked
+        assertThat(clock.motionMs - before).isAtMost(250.0)
+        clock.rest()
+        assertThat(clock.speed).isEqualTo(0f)
+        val rested = clock.motionMs
+        clock.wake(50_000)
+        clock.advance(50_000)
+        assertWithMessage("the first frame after rest() starts from zero elapsed").that(clock.motionMs).isEqualTo(rested)
+    }
+
+    /** A drifting particle group's offset always lands inside the view, from any motion time. */
+    @Test
+    fun aDriftWrapsIntoTheView() {
+        assertThat(AuroraMotion.wrap(0f, 100)).isEqualTo(0f)
+        assertThat(AuroraMotion.wrap(250f, 100)).isEqualTo(50f)
+        assertThat(AuroraMotion.wrap(-30f, 100)).isEqualTo(70f)
+        assertThat(AuroraMotion.wrap(42f, 0)).isEqualTo(0f)
+        var v = -1000f
+        while (v < 1000f) {
+            assertThat(AuroraMotion.wrap(v, 97)).isIn(Range.closedOpen(0f, 97f))
+            v += 13.7f
+        }
+    }
+
+    /**
+     * Typing holds the motion (maintainer 2026-11-11: "resume after 1s of no typing"): a key
+     * press slows it to a stop within the hold ease, no frames are asked for while presses keep
+     * coming, and it moves again one second after the last press.
+     */
+    @Test
+    fun typingHoldsTheMotionUntilASecondAfterTheLastPress() {
+        val clock = AuroraMotionClock(idleMs = 20_000, easeMs = 1_000, maxStepMs = 250, holdMs = 1_000, holdEaseMs = 250)
+        var now = 0L
+        clock.wake(now)
+        while (now < 2_000) { now += 100; clock.advance(now) }
+        assertThat(clock.speed).isEqualTo(1f)
+        // A burst of presses every 200 ms for three seconds.
+        val burstEnd = now + 3_000
+        var stoppedAt = -1L
+        var movingWhileHeld = 0
+        while (now < burstEnd) {
+            if (now % 200 == 0L) clock.touch(now)
+            now += 100
+            val moving = clock.advance(now)
+            if (clock.speed == 0f && stoppedAt < 0) stoppedAt = now
+            if (stoppedAt >= 0 && moving) movingWhileHeld++
+        }
+        assertWithMessage("stopped within the hold ease").that(stoppedAt - 2_000).isAtMost(300L)
+        assertWithMessage("no frames once stopped while typing").that(movingWhileHeld).isEqualTo(0)
+        val lastPress = burstEnd - 200
+        assertThat(clock.isHeld(lastPress + 999)).isTrue()
+        assertThat(clock.holdEndsAt).isEqualTo(lastPress + 1_000)
+        val held = clock.motionMs
+        clock.advance(lastPress + 999)
+        assertWithMessage("still while held").that(clock.motionMs).isEqualTo(held)
+        assertThat(clock.isHeld(lastPress + 1_000)).isFalse()
+        assertWithMessage("moving again after the hold").that(clock.advance(lastPress + 1_000)).isTrue()
+        clock.advance(lastPress + 1_100)
+        assertThat(clock.motionMs).isGreaterThan(held)
+        assertWithMessage("it speeds up gently, no jump").that(clock.motionMs - held).isAtMost(30.0)
+    }
+
+    /** A held clock still rests after the idle time once typing stops. */
+    @Test
+    fun aHoldDoesNotKeepTheBackdropAwake() {
+        val clock = AuroraMotionClock(idleMs = 5_000, easeMs = 500, maxStepMs = 250, holdMs = 1_000, holdEaseMs = 250)
+        clock.touch(0)
+        var now = 0L
+        var last = true
+        while (now < 10_000) { now += 100; last = clock.advance(now) }
+        assertThat(last).isFalse()
+        assertThat(clock.speed).isEqualTo(0f)
+    }
+
+    /**
+     * The pause after typing and the idle timeout are the user's (maintainer 2026-11-11: "make
+     * number of seconds after last key press/swipe before animation and duration until idle
+     * stop user settings"): the clock follows a changed value at once, 0 means typing never
+     * holds it, and a hand-edited backup is clamped into the sliders' ranges.
+     */
+    @Test
+    fun theUsersPauseAndIdleTimeoutDriveTheClock() {
+        val clock = AuroraMotionClock(easeMs = 0, maxStepMs = 250, holdEaseMs = 0)
+        clock.holdMs = 3_000
+        clock.idleMs = 8_000
+        clock.touch(0)
+        assertThat(clock.isHeld(2_999)).isTrue()
+        assertThat(clock.isHeld(3_000)).isFalse()
+        var now = 3_000L
+        while (now < 7_900) { now += 100; assertThat(clock.advance(now)).isTrue() }
+        now = 8_000
+        assertWithMessage("rests at the user's idle timeout").that(clock.advance(now)).isFalse()
+
+        clock.holdMs = 0
+        clock.touch(now)
+        assertWithMessage("no pause: a press never holds").that(clock.isHeld(now)).isFalse()
+        assertThat(clock.advance(now + 100)).isTrue()
+
+        val tuning = SceneMotionTuning.fromPercent(100, 100, 55, false, resumeMs = 2_500, idleSeconds = 45)
+        assertThat(tuning.resumeMs).isEqualTo(2_500L)
+        assertThat(tuning.idleMs).isEqualTo(45_000L)
+        val wild = SceneMotionTuning.fromPercent(100, 100, 55, false, resumeMs = -5, idleSeconds = 99_999)
+        assertThat(wild.resumeMs).isEqualTo(SceneMotionTuning.RESUME_MS.first.toLong())
+        assertThat(wild.idleMs).isEqualTo(SceneMotionTuning.IDLE_SECONDS.last * 1000L)
+        assertWithMessage("the defaults are the designed timings")
+            .that(SceneMotionTuning.DEFAULT.resumeMs to SceneMotionTuning.DEFAULT.idleMs)
+            .isEqualTo(AuroraMotion.TYPING_HOLD_MS to AuroraMotion.IDLE_MS)
+    }
+
+    /**
+     * The user's frame rate replaces every scene's own (the Pixel measured ~9.5 mJ of compute a
+     * frame for every scene, so this is the battery lever); 0 keeps each scene's; out-of-range
+     * values from an old or hand-edited backup are clamped.
+     */
+    @Test
+    fun theUsersFrameRateSetsTheFrameInterval() {
+        assertWithMessage("0 = the scene's own").that(SceneMotionTuning.DEFAULT.frameMs(AuroraMotion.AURORA_FRAME_MS))
+            .isEqualTo(AuroraMotion.AURORA_FRAME_MS)
+        assertThat(SceneMotionTuning.DEFAULT.frameMs(83L)).isEqualTo(83L)
+        val five = SceneMotionTuning.fromPercent(100, 100, 55, false, fps = 5)
+        assertThat(five.frameMs(AuroraMotion.AURORA_FRAME_MS)).isEqualTo(200L)
+        assertThat(five.frameMs(AuroraMotion.FRAME_MS)).isEqualTo(200L)
+        assertThat(SceneMotionTuning.fromPercent(100, 100, 55, false, fps = 1).frameMs(100L)).isEqualTo(1_000L)
+        val wild = SceneMotionTuning.fromPercent(100, 100, 55, false, fps = 999)
+        assertThat(wild.fps).isEqualTo(SceneMotionTuning.FPS.last)
+        assertThat(SceneMotionTuning.fromPercent(100, 100, 55, false, fps = -3).fps).isEqualTo(0)
+        assertWithMessage("the overlay is on by default and passes through")
+            .that(SceneMotionTuning.DEFAULT.overlay to SceneMotionTuning.fromPercent(100, 100, 55, false, overlay = false).overlay)
+            .isEqualTo(true to false)
+    }
+
+    /** Only a whole visible step on screen draws a frame; what is shown is never a step behind. */
+    @Test
+    fun anUnchangedFrameIsSkipped() {
+        val gate = VisibleChangeGate()
+        val state = floatArrayOf(0f, 10f)
+        assertWithMessage("the first frame is always drawn").that(gate.changed(state, 2)).isTrue()
+        state[0] = 0.6f
+        assertThat(gate.changed(state, 2)).isFalse()
+        state[0] = 0.99f; state[1] = 9.2f
+        assertThat(gate.changed(state, 2)).isFalse()
+        state[0] = 1.0f
+        assertThat(gate.changed(state, 2)).isTrue()
+        state[0] = 1.5f
+        assertWithMessage("compared with what is shown, not the last tick").that(gate.changed(state, 2)).isFalse()
+        assertWithMessage("a different shape of state is a change").that(gate.changed(state, 1)).isTrue()
+        gate.reset()
+        assertThat(gate.changed(state, 1)).isTrue()
+    }
+
+    /**
+     * The gate never lets the screen fall a whole step behind the motion. At the designed tuning
+     * the aurora changes visibly every frame (its frame rate was set by its pace: measured
+     * 2026-11-11, every scene drew 100 % of its frames), so the gate saves frames only where the
+     * motion is slower: a tuning with no movement and no twinkle draws its first frame and then
+     * nothing, where before it redrew the same picture ten times a second.
+     */
+    @Test
+    fun theGateKeepsUpAndSkipsAStillTuning() {
+        val density = 2.75f
+        fun run(tuning: SceneMotionTuning): Pair<Int, Int> {
+            val gate = VisibleChangeGate()
+            val n = 3 + AuroraMotion.STAR_GROUPS
+            val state = FloatArray(n)
+            var shown = FloatArray(n)
+            var drawn = 0; var ticks = 0
+            var t = 0.0
+            while (t < 120.0) {
+                val f = AuroraMotion.frame(t, MotionStyle.AURORA, tuning)
+                state[0] = f.driftADp * density / VisibleChangeGate.POSITION_STEP_PX
+                state[1] = f.driftBDp * density / VisibleChangeGate.POSITION_STEP_PX
+                state[2] = f.crossfade * 255f / VisibleChangeGate.ALPHA_STEP
+                for (g in 0 until AuroraMotion.STAR_GROUPS) state[3 + g] = f.starAlpha[g] * 230f / VisibleChangeGate.ALPHA_STEP
+                ticks++
+                if (gate.changed(state, n)) { drawn++; shown = state.copyOf() }
+                for (i in 0 until n) assertThat(abs(state[i] - shown[i])).isLessThan(1f)
+                t += 0.1
+            }
+            return drawn to ticks
+        }
+        val (moving, ticks) = run(SceneMotionTuning.DEFAULT)
+        assertThat(moving).isGreaterThan(ticks / 2)
+        val (still, _) = run(SceneMotionTuning(intensity = 0f, twinkle = 0f))
+        assertWithMessage("no movement, no twinkle: only the first frame").that(still).isEqualTo(1)
+    }
+
+    /**
+     * The Frame Rate setting changes how often the scene is drawn, never how fast it moves: at
+     * 1 fps each 1 s tick advances 1 s of motion (a fixed 250 ms step cap made it quarter speed;
+     * Fable audit 2026-11-12), and a longer gap (the keyboard hidden) is still capped.
+     */
+    @Test
+    fun aLowFrameRateDoesNotSlowTheMotion() {
+        assertThat(AuroraMotionClock.stepCapFor(83L)).isEqualTo(AuroraMotionClock.DEFAULT_MAX_STEP_MS)
+        assertThat(AuroraMotionClock.stepCapFor(1000L)).isEqualTo(2000L)
+        for (fps in listOf(1, 2, 3, 5, 10)) {
+            val frameMs = SceneMotionTuning(fps = fps).frameMs(AuroraMotion.AURORA_FRAME_MS)
+            val clock = AuroraMotionClock(idleMs = 600_000L, maxStepMs = AuroraMotionClock.stepCapFor(frameMs))
+            clock.wake(0L)
+            var now = 0L
+            clock.advance(now)
+            // Past the ease-in, then one minute of ticks.
+            while (now < 10_000L) { now += frameMs; clock.advance(now) }
+            val before = clock.motionMs
+            repeat((60_000L / frameMs).toInt()) { now += frameMs; clock.advance(now) }
+            val perSecond = (clock.motionMs - before) / ((60_000L / frameMs) * frameMs / 1000.0)
+            assertWithMessage("$fps fps: motion ms per second").that(perSecond).isWithin(1.0).of(1000.0)
+            // A long gap (keyboard hidden, phone asleep) still counts as at most two frames.
+            val gapStart = clock.motionMs
+            clock.advance(now + 3_600_000L)
+            assertWithMessage("$fps fps: an hour's gap").that(clock.motionMs - gapStart)
+                .isAtMost(AuroraMotionClock.stepCapFor(frameMs).toDouble())
+        }
+    }
+
+    /** Battery saver, animations off, a warm phone and a low battery (not charging) keep it still. */
+    @Test
+    fun thePhonesStateDecidesWhetherItMoves() {
+        fun allows(saver: Boolean = false, anim: Boolean = true, thermal: Int = 0, pct: Int = 80, charging: Boolean = false) =
+            MotionAllowance.allows(saver, anim, thermal, pct, charging)
+        assertThat(allows()).isTrue()
+        assertThat(allows(saver = true)).isFalse()
+        assertThat(allows(anim = false)).isFalse()
+        assertThat(allows(thermal = 1)).isTrue()
+        assertWithMessage("MODERATE: a Galaxy reports it under ordinary load").that(allows(thermal = 2)).isTrue()
+        assertThat(allows(thermal = MotionAllowance.THERMAL_LIMIT)).isFalse()
+        assertThat(allows(pct = MotionAllowance.LOW_BATTERY_PERCENT)).isFalse()
+        assertThat(allows(pct = MotionAllowance.LOW_BATTERY_PERCENT, charging = true)).isTrue()
+        assertThat(allows(pct = MotionAllowance.LOW_BATTERY_PERCENT + 1)).isTrue()
+        assertWithMessage("an unknown battery level does not limit").that(allows(pct = -1)).isTrue()
+    }
+
+    private companion object {
+        /**
+         * The farthest a particle may travel between two frames, dp: the width of the largest
+         * snowflake (1.6 dp radius), so the biggest particles overlap where they were a frame
+         * before. The snow's flakes (falling at up to 18 × 1.3 dp/s) step 2.9 dp at its 8 fps; at
+         * 7 fps they stepped 3.3, past their own width (round 17 review). The stream's glints step
+         * 1.9 dp at 7 fps, the meadow's pollen 0.7.
+         */
+        const val MAX_PARTICLE_STEP_DP = 3.2f
+    }
+}
+
